@@ -3,6 +3,7 @@
 // Author      : Bruce
 //============================================================================
 
+#include <cstdlib>
 #include <iostream>
 
 void identify(char *exeName)
@@ -17,5 +18,5 @@ int main(int argc, char* argv[]) {
 	// output name
 	identify(argv[0]);
 
-	return 0;
+	return EXIT_SUCCESS;
 }
