@@ -5,20 +5,11 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <string>
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <netdb.h>
-#include <stdio.h>
-#include <unistd.h>
 #include <string.h>
-#include <stdlib.h>
 #include <errno.h>
-#include <time.h>
-#define LOCAL_SERVER_PORT 1234
-#define BUF 255
 
 void identify(char *exeName)
 {
@@ -28,68 +19,117 @@ void identify(char *exeName)
 	std::cout << "---------------------------------------------------" << std::endl;
 }
 
-int echo_packages(int argc, char* argv[])
+class UDPServer {
+private:
+	static const short unsigned int BufferSize = 255;
+	uint16_t m_port;
+	char m_buffer[BufferSize];
+	int m_socket;
+	bool m_alreadyBound;
+
+	// clear the data buffer
+	void clearBuffer(){
+		memset(m_buffer, 0, BufferSize);
+	}
+public:
+	// a class for error-exceptions
+	class Error {
+	private:
+		std::string m_errstr;
+		int m_errno;
+	public:
+		Error(std::string errstr, int e) : m_errstr(errstr), m_errno(e) {}
+		void print(){
+			std::cout << m_errstr << " (" << m_errno << ")" << std::endl;
+		}
+	};
+
+	// specify a port to bind in constructor
+	UDPServer(uint16_t port = 1234) : m_port(port), m_socket(-1), m_alreadyBound(false){}
+	// no copy constructor
+	UDPServer(const UDPServer &) = delete;
+	// no assignment
+	UDPServer &operator=(const UDPServer &) = delete;
+
+	// bind server to port for any address
+	void bind();
+	// receive data and provided it in internal buffer
+	const char *receive();
+};
+
+void UDPServer::bind()
 {
-	int s, rc, n;
-	unsigned int len;
-	struct sockaddr_in cliAddr, servAddr;
-	char puffer[BUF];
-	time_t time1;
-	char loctime[BUF];
-	char *ptr;
+	struct sockaddr_in serverAddress;
 	const int y = 1;
 
+	if(m_alreadyBound){
+		return;
+	}
+
 	// create socket
-	s = socket (AF_INET, SOCK_DGRAM, 0);
-	if (s < 0) {
-		std::cout << argv[0] << ": cannot open socket ... ("
-				<< strerror(errno) << ")" << std::endl;
-		return EXIT_FAILURE;
+	m_socket = socket(AF_INET, SOCK_DGRAM, 0);
+	if(m_socket < 0){
+		throw Error(std::string("ERROR: cannot open socket"), errno);
 	}
 
 	// bind correct server port
-	servAddr.sin_family = AF_INET;
-	servAddr.sin_addr.s_addr = htonl (INADDR_ANY);
-	servAddr.sin_port = htons (LOCAL_SERVER_PORT);
-	setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &y, sizeof(int));
-	rc = bind ( s, (struct sockaddr *) &servAddr, sizeof (servAddr));
-	if (rc < 0) {
-		std::cout << argv[0] << ": cannot bind port nummer " << LOCAL_SERVER_PORT << " ("
-				<< strerror(errno) << ")" << std::endl;
-		return EXIT_FAILURE;
+	serverAddress.sin_family = AF_INET;
+	serverAddress.sin_addr.s_addr = htonl (INADDR_ANY);
+	serverAddress.sin_port = htons(m_port);
+	setsockopt(m_socket, SOL_SOCKET, SO_REUSEADDR, &y, sizeof(int));
+	int rc = ::bind(m_socket, (struct sockaddr *) &serverAddress, sizeof (serverAddress));
+	if(rc != 0){
+		throw Error(std::string("ERROR: cannot bind port number"), errno);
 	}
-	std::cout << argv[0] << ": waiting for data on port (UDP) " << LOCAL_SERVER_PORT << std::endl;
 
-	// Server loop
-	while (1) {
-		// initialize buffer
-		memset (puffer, 0, BUF);
-		// receive messages
-		len = sizeof (cliAddr);
-		n = recvfrom ( s, puffer, BUF, 0, (struct sockaddr *) &cliAddr, &len );
-		if (n < 0) {
-			std::cout << argv[0]  << ": cannot receive any data ..." << std::cout;
-			continue;
-		}
-		// prepare time values
-		time(&time1);
-		strncpy(loctime, ctime(&time1), BUF);
-		ptr = strchr(loctime, '\n' );
-		*ptr = '\0';
-		// output received messages
-		std::cout << loctime << ": received data from " << inet_ntoa (cliAddr.sin_addr) << ":UDP"
-				<< ntohs (cliAddr.sin_port) << " : " << puffer << std::endl;
+	// no error => server is bound
+	m_alreadyBound = true;
+}
 
+const char *UDPServer::receive()
+{
+	// throw exception, if server not yet bound
+	if(!m_alreadyBound){
+		throw Error(std::string("ERROR: server not yet bound"), errno);
 	}
-	return EXIT_SUCCESS;
+
+	struct sockaddr_in clientAddress;
+
+	// clear buffer and receive messages
+	clearBuffer();
+	unsigned int len = sizeof (clientAddress);
+	int n = recvfrom(m_socket, m_buffer, BufferSize, 0, (struct sockaddr *) &clientAddress, &len );
+	if (n < 0) {
+		// received dirty data
+		return nullptr;
+	}
+	return m_buffer;
 }
 
 int main(int argc, char* argv[]) {
 	// output name
 	identify(argv[0]);
 
-	// send strings from command line
-	int ret = echo_packages(argc, argv);
+	// parse command line
+	unsigned short int port = 5908;
+	if(argc > 1){
+		port = atoi(argv[1]);
+	}
 
-	return ret;
+	UDPServer server(port);
+	try{
+		server.bind();
+		while(1){
+			const char *buffer = server.receive();
+			if(buffer){
+				std::cout << "Received data :|" << buffer << "|" << std::endl;
+			}else{
+				std::cout << "Received dirty data" << std::endl;
+			}
+		}
+	}catch(UDPServer::Error &err){
+		err.print();
+		return EXIT_FAILURE;
+	}
+	return EXIT_SUCCESS;
 }
